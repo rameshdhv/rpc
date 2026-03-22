@@ -86,7 +86,7 @@ async function getGoogleAccessToken() {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload?.access_token) {
-    throw new Error(payload?.error_description || payload?.error || "Unable to authenticate with Google Drive.");
+    throw new Error(`Google Drive auth failed: ${payload?.error_description || payload?.error || "Unable to authenticate with Google Drive."}`);
   }
 
   return payload.access_token;
@@ -173,7 +173,7 @@ exports.handler = async (event) => {
 
   const { user, error: verifiedUserError } = await getVerifiedUser(adminSupabase, token);
   if (verifiedUserError || !user) {
-    return json(401, { error: verifiedUserError || "Invalid auth token" });
+    return json(401, { error: `Supabase auth failed: ${verifiedUserError || "Invalid auth token"}` });
   }
 
   const { data: adminProfile, error: profileError } = await adminSupabase
@@ -183,7 +183,7 @@ exports.handler = async (event) => {
     .maybeSingle();
 
   if (profileError || !adminProfile) {
-    return json(403, { error: "User is not an admin" });
+    return json(403, { error: "Supabase admin check failed: User is not an admin" });
   }
 
   const body = JSON.parse(event.body || "{}");

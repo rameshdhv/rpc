@@ -1872,7 +1872,7 @@ function createConsultationItem(consultation) {
 
   const right = document.createElement("span");
   right.className = "patient-consultation-chevron";
-  right.textContent = ">";
+  right.textContent = "▸";
   header.append(left, right);
 
   const body = document.createElement("div");
@@ -1910,7 +1910,7 @@ function createConsultationItem(consultation) {
     const collapsed = !body.hidden;
     body.hidden = collapsed;
     item.classList.toggle("open", !collapsed);
-    right.textContent = collapsed ? ">" : "v";
+    right.textContent = collapsed ? "▸" : "▾";
   });
 
   item.append(header, body);
