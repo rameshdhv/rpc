@@ -1,7 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  CLINIC_NAME,
-  CLINIC_PHONE,
   SERVICES,
   SLOT_DURATION_MINUTES,
   SLOT_END_MINUTES,
@@ -240,178 +238,6 @@ function setStatus(el, text, type = "") {
   el.textContent = text;
 }
 
-function setConsultationUploadState(message, tone = "", options = {}) {
-  if (!consultationUploadStatus) {
-    return;
-  }
-  consultationUploadStatus.hidden = !message;
-  consultationUploadStatus.textContent = message || "";
-  consultationUploadStatus.classList.remove("status-error", "status-ok", "status-warn", "status-muted");
-  if (tone) {
-    consultationUploadStatus.classList.add(`status-${tone}`);
-  } else {
-    consultationUploadStatus.classList.add("status-muted");
-  }
-  if (uploadPrescriptionBtn) {
-    uploadPrescriptionBtn.disabled = Boolean(options.busy);
-    uploadPrescriptionBtn.textContent = options.busy ? "Uploading..." : "Upload Docs";
-  }
-}
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Unable to read the selected file."));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function handlePrescriptionUpload(event) {
-  const file = event?.target?.files?.[0];
-  if (!file) {
-    return;
-  }
-
-  const selectedPatient = patientRecordsCache.find((entry) => entry.id === String(patientFormId?.value || selectedPatientRecordId || "").trim()) || null;
-
-  if (!String(patientFormId?.value || selectedPatientRecordId || "").trim()) {
-    setStatus(appStatus, "Save or select a patient before uploading docs.", "warn");
-    showToast("Save the patient first, then upload docs.", "warn");
-    consultationPrescriptionFileInput.value = "";
-    return;
-  }
-
-  if (consultationUploadInFlight) {
-    consultationPrescriptionFileInput.value = "";
-    return;
-  }
-
-  if (file.size > 8 * 1024 * 1024) {
-    setConsultationUploadState("Choose a file smaller than 8 MB.", "error");
-    showToast("Choose a file smaller than 8 MB.", "warn");
-    consultationPrescriptionFileInput.value = "";
-    return;
-  }
-
-  const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
-  if (file.type && !allowedTypes.includes(file.type)) {
-    setConsultationUploadState("Only JPG, PNG, WEBP, GIF, or PDF files are supported.", "error");
-    showToast("Unsupported file type.", "warn");
-    consultationPrescriptionFileInput.value = "";
-    return;
-  }
-
-  consultationUploadInFlight = true;
-  setConsultationUploadState(`Uploading ${file.name} to Google Drive...`, "warn", { busy: true });
-
-  try {
-    const token = await getAccessToken();
-    const dataUrl = await readFileAsDataUrl(file);
-    const base64Payload = dataUrl.split(",")[1];
-    if (!base64Payload) {
-      throw new Error("Unable to prepare the selected file for upload.");
-    }
-
-    const response = await fetch("/api/upload-prescription", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        dataBase64: base64Payload,
-        patientId: String(patientFormId?.value || selectedPatientRecordId || "").trim(),
-        patientCode: selectedPatient?.clinic_patient_code || null,
-        patientName: selectedPatient?.patient_name || String(patientNameInput?.value || "").trim() || null,
-        patientPhone: selectedPatient?.patient_phone || String(patientPhoneInput?.value || "").trim() || null,
-        consultationDate: String(consultationDateInput?.value || "").trim() || null
-      })
-    });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload?.driveUrl) {
-      throw new Error(payload?.error || "Upload failed.");
-    }
-
-    if (consultationReportUrlInput) {
-      consultationReportUrlInput.value = payload.driveUrl;
-    }
-    if (payload.folderUrl) {
-      if (patientDriveUrlInput) {
-        patientDriveUrlInput.value = payload.folderUrl;
-      }
-      if (patientDriveLink) {
-        patientDriveLink.href = payload.folderUrl;
-        patientDriveLink.hidden = false;
-        patientDriveLink.textContent = "Access folder";
-      }
-      if (selectedPatient) {
-        selectedPatient.drive_folder_url = payload.folderUrl;
-      }
-    }
-
-    setConsultationUploadState(`Uploaded to Google Drive: ${file.name}`, "ok");
-    showToast("Docs uploaded successfully.", "success");
-  } catch (error) {
-    setConsultationUploadState(`Upload failed: ${error.message}`, "error");
-    showToast(`Upload failed: ${error.message}`, "error");
-  } finally {
-    consultationUploadInFlight = false;
-    if (uploadPrescriptionBtn) {
-      uploadPrescriptionBtn.disabled = false;
-      uploadPrescriptionBtn.textContent = "Upload Docs";
-    }
-    if (consultationPrescriptionFileInput) {
-      consultationPrescriptionFileInput.value = "";
-    }
-  }
-}
-
-async function ensurePatientDriveFolder(patient) {
-  if (!patient?.id || !patient.clinic_patient_code || !patient.patient_phone) {
-    throw new Error("Patient details are incomplete. Save the patient before accessing the folder.");
-  }
-
-  const token = await getAccessToken();
-  const response = await fetch("/api/ensure-patient-folder", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      patientId: patient.id,
-      patientCode: patient.clinic_patient_code,
-      patientPhone: patient.patient_phone
-    })
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload?.folderUrl) {
-    throw new Error(payload?.error || "Unable to access patient folder.");
-  }
-
-  patient.drive_folder_url = payload.folderUrl;
-  if (patientDriveUrlInput) {
-    patientDriveUrlInput.value = payload.folderUrl;
-  }
-  if (patientDriveLink) {
-    patientDriveLink.href = payload.folderUrl;
-    patientDriveLink.hidden = false;
-    patientDriveLink.textContent = "Access folder";
-  }
-
-  await supabase
-    .from("patients")
-    .update({ drive_folder_url: payload.folderUrl })
-    .eq("id", patient.id);
-
-  return payload.folderUrl;
-}
-
 function updateAuthHeader(title, lead) {
   if (authTitle) {
     authTitle.textContent = title;
@@ -590,7 +416,10 @@ function showMfaSetupView() {
   if (forgotPasswordBtn) {
     forgotPasswordBtn.hidden = true;
   }
-if (confirmLinkForm) {
+  if (resendConfirmationBtn) {
+    resendConfirmationBtn.hidden = true;
+  }
+  if (confirmLinkForm) {
     confirmLinkForm.hidden = true;
   }
   if (forgotForm) {
@@ -883,7 +712,7 @@ async function startMfaEnrollment(existingFactors = []) {
 
   const { data, error } = await supabase.auth.mfa.enroll({
     factorType: "totp",
-    issuer: CLINIC_NAME,
+    issuer: "Sarvam Dental Clinic",
     friendlyName: "Clinic Admin"
   });
 
@@ -1086,29 +915,22 @@ async function handleLogin(event) {
   event.preventDefault();
   const email = emailInput.value.trim().toLowerCase();
   const password = passwordInput.value;
-  setStatus(loginStatus, "", "");
 
-  await supabase.auth.signOut().catch(() => {});
-  currentAdminProfile = null;
-  resetMfaState();
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    setStatus(loginStatus, error.message, "error");
+    return;
+  }
+
+  setStatus(loginStatus, "Password verified. Checking authenticator...", "ok");
 
   try {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setStatus(loginStatus, error.message, "error");
-      passwordInput?.focus();
-      return;
-    }
-
-    setStatus(loginStatus, "Password verified. Checking authenticator...", "ok");
     await continueAdminAuthFlow({ enforceSelectedRole: true });
   } catch (authError) {
-    const message = authError?.message || "Unable to continue login.";
-    setStatus(loginStatus, message, "error");
+    setStatus(loginStatus, authError.message || "Unable to continue login.", "error");
     await supabase.auth.signOut().catch(() => {});
     showLoginView();
     resetMfaState();
-    passwordInput?.focus();
   }
 }
 
@@ -1471,7 +1293,7 @@ function openBlockConflictModal(action) {
     action.conflicts.forEach((appointment) => {
       const item = document.createElement("div");
       item.className = "conflict-item";
-      item.innerHTML = `<strong>${appointment.patient_name}</strong><small>${appointment.preferred_date} � ${appointment.preferred_slot} � ${appointment.service}</small>`;
+      item.innerHTML = `<strong>${appointment.patient_name}</strong><small>${appointment.preferred_date} | ${appointment.preferred_slot} | ${appointment.service}</small>`;
       blockConflictList.appendChild(item);
     });
   }
@@ -1630,7 +1452,7 @@ function setCollapseToggleState(button, collapsed, label) {
   if (!button) {
     return;
   }
-  button.textContent = collapsed ? "▾" : "▴";
+  button.textContent = collapsed ? "v" : "^";
   const action = collapsed ? "Expand" : "Collapse";
   button.setAttribute("aria-label", `${action} ${label}`);
   button.setAttribute("title", `${action} ${label}`);
@@ -1850,6 +1672,249 @@ async function getAccessToken() {
     throw new Error("Session expired. Please login again.");
   }
   return token;
+}
+
+function setConsultationUploadState(message = "", tone = "", options = {}) {
+  if (!consultationUploadStatus) {
+    return;
+  }
+  consultationUploadStatus.hidden = !message;
+  consultationUploadStatus.textContent = message || "";
+  consultationUploadStatus.classList.remove("status-error", "status-ok", "status-warn", "status-muted");
+  if (tone) {
+    consultationUploadStatus.classList.add(`status-${tone}`);
+  } else {
+    consultationUploadStatus.classList.add("status-muted");
+  }
+  if (uploadPrescriptionBtn) {
+    uploadPrescriptionBtn.disabled = Boolean(options.busy);
+    uploadPrescriptionBtn.textContent = options.busy ? "Uploading..." : "Upload Docs";
+  }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Unable to read the selected file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handlePrescriptionUpload(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  const selectedPatient = patientRecordsCache.find((entry) => entry.id === String(patientFormId?.value || selectedPatientRecordId || "").trim()) || null;
+
+  if (!String(patientFormId?.value || selectedPatientRecordId || "").trim()) {
+    setStatus(appStatus, "Save or select a patient before uploading docs.", "warn");
+    showToast("Save the patient first, then upload docs.", "warn");
+    consultationPrescriptionFileInput.value = "";
+    return;
+  }
+
+  if (consultationUploadInFlight) {
+    consultationPrescriptionFileInput.value = "";
+    return;
+  }
+
+  if (file.size > 8 * 1024 * 1024) {
+    setConsultationUploadState("Choose a file smaller than 8 MB.", "error");
+    showToast("Choose a file smaller than 8 MB.", "warn");
+    consultationPrescriptionFileInput.value = "";
+    return;
+  }
+
+  const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
+  if (file.type && !allowedTypes.includes(file.type)) {
+    setConsultationUploadState("Only JPG, PNG, WEBP, GIF, or PDF files are supported.", "error");
+    showToast("Unsupported file type.", "warn");
+    consultationPrescriptionFileInput.value = "";
+    return;
+  }
+
+  consultationUploadInFlight = true;
+  setConsultationUploadState(`Uploading ${file.name} to Google Drive...`, "warn", { busy: true });
+
+  try {
+    const token = await getAccessToken();
+    const dataUrl = await readFileAsDataUrl(file);
+    const base64Payload = dataUrl.split(",")[1];
+    if (!base64Payload) {
+      throw new Error("Unable to prepare the selected file for upload.");
+    }
+
+    const response = await fetch("/api/upload-prescription", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        dataBase64: base64Payload,
+        patientId: String(patientFormId?.value || selectedPatientRecordId || "").trim(),
+        patientCode: selectedPatient?.clinic_patient_code || null,
+        patientName: selectedPatient?.patient_name || String(patientNameInput?.value || "").trim() || null,
+        patientPhone: selectedPatient?.patient_phone || String(patientPhoneInput?.value || "").trim() || null,
+        consultationDate: String(consultationDateInput?.value || "").trim() || null
+      })
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.driveUrl) {
+      throw new Error(payload?.error || "Upload failed.");
+    }
+
+    if (consultationReportUrlInput) {
+      consultationReportUrlInput.value = payload.driveUrl;
+    }
+    if (payload.folderUrl) {
+      if (patientDriveUrlInput) {
+        patientDriveUrlInput.value = payload.folderUrl;
+      }
+      if (patientDriveLink) {
+        patientDriveLink.href = payload.folderUrl;
+        patientDriveLink.hidden = false;
+      }
+      if (selectedPatient) {
+        selectedPatient.drive_folder_url = payload.folderUrl;
+      }
+    }
+
+    setConsultationUploadState(`Uploaded to Google Drive: ${file.name}`, "ok");
+    showToast("Docs uploaded successfully.", "success");
+  } catch (error) {
+    setConsultationUploadState(`Upload failed: ${error.message}`, "error");
+    showToast(`Upload failed: ${error.message}`, "error");
+  } finally {
+    consultationUploadInFlight = false;
+    if (uploadPrescriptionBtn) {
+      uploadPrescriptionBtn.disabled = false;
+      uploadPrescriptionBtn.textContent = "Upload Docs";
+    }
+    if (consultationPrescriptionFileInput) {
+      consultationPrescriptionFileInput.value = "";
+    }
+  }
+}
+
+async function ensurePatientDriveFolder(patient) {
+  if (!patient?.id || !patient.clinic_patient_code || !patient.patient_phone) {
+    throw new Error("Patient details are incomplete. Save the patient before accessing the folder.");
+  }
+
+  const token = await getAccessToken();
+  const response = await fetch("/api/ensure-patient-folder", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      patientId: patient.id,
+      patientCode: patient.clinic_patient_code,
+      patientPhone: patient.patient_phone
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.folderUrl) {
+    throw new Error(payload?.error || "Unable to access patient folder.");
+  }
+
+  patient.drive_folder_url = payload.folderUrl;
+  if (patientDriveUrlInput) {
+    patientDriveUrlInput.value = payload.folderUrl;
+  }
+  if (patientDriveLink) {
+    patientDriveLink.href = payload.folderUrl;
+    patientDriveLink.hidden = false;
+    patientDriveLink.textContent = "Access folder";
+  }
+
+  await supabase
+    .from("patients")
+    .update({ drive_folder_url: payload.folderUrl })
+    .eq("id", patient.id);
+
+  return payload.folderUrl;
+}
+
+function formatDisplayDate(value) {
+  const [year, month, day] = String(value || "").split("-");
+  if (!year || !month || !day) {
+    return value || "-";
+  }
+  return `${day}-${month}-${year}`;
+}
+
+function createConsultationItem(consultation) {
+  const item = document.createElement("article");
+  item.className = "patient-consultation-card";
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "patient-consultation-toggle";
+
+  const left = document.createElement("div");
+  left.className = "patient-consultation-copy";
+  const title = document.createElement("strong");
+  title.textContent = formatDisplayDate(consultation.consultation_date);
+  const preview = document.createElement("span");
+  const previewText = consultation.notes ? String(consultation.notes).replace(/\s+/g, " ").trim() : "No notes added.";
+  preview.textContent = previewText.length > 96 ? `${previewText.slice(0, 96)}...` : previewText;
+  left.append(title, preview);
+
+  const right = document.createElement("span");
+  right.className = "patient-consultation-chevron";
+  right.textContent = ">";
+  header.append(left, right);
+
+  const body = document.createElement("div");
+  body.className = "patient-consultation-body";
+  body.hidden = true;
+
+  const notesBlock = document.createElement("div");
+  notesBlock.className = "patient-consultation-detail";
+  const notesTitle = document.createElement("strong");
+  notesTitle.textContent = "Notes";
+  const notesText = document.createElement("p");
+  notesText.textContent = consultation.notes || "-";
+  notesBlock.append(notesTitle, notesText);
+
+  const docsBlock = document.createElement("div");
+  docsBlock.className = "patient-consultation-detail";
+  const docsTitle = document.createElement("strong");
+  docsTitle.textContent = "Docs";
+  const docsText = document.createElement("p");
+  if (consultation.report_url) {
+    const docsLink = document.createElement("a");
+    docsLink.href = consultation.report_url;
+    docsLink.target = "_blank";
+    docsLink.rel = "noopener noreferrer";
+    docsLink.textContent = "Open uploaded docs";
+    docsText.appendChild(docsLink);
+  } else {
+    docsText.textContent = "No docs uploaded.";
+  }
+  docsBlock.append(docsTitle, docsText);
+
+  body.append(notesBlock, docsBlock);
+
+  header.addEventListener("click", () => {
+    const collapsed = !body.hidden;
+    body.hidden = collapsed;
+    item.classList.toggle("open", !collapsed);
+    right.textContent = collapsed ? ">" : "v";
+  });
+
+  item.append(header, body);
+  return item;
 }
 
 async function handleAddUser(event) {
@@ -2087,7 +2152,7 @@ function openWhatsappForStatus(appointment, status, reasonOverride = "") {
       `Slot: ${appointment.preferred_slot}`,
       `Service: ${appointment.service}`,
       "Please arrive 10 minutes early.",
-      CLINIC_NAME
+      "Sarvam Dental Clinic"
     ].join("\n")
     : isCancellation
       ? [
@@ -2096,16 +2161,16 @@ function openWhatsappForStatus(appointment, status, reasonOverride = "") {
         `Date: ${appointment.preferred_date}`,
         `Slot: ${appointment.preferred_slot}`,
         `Service: ${appointment.service}`,
-        `Please contact ${CLINIC_NAME} if you would like to reschedule.`,
-        CLINIC_NAME
+        "Please contact Sarvam Dental Clinic if you would like to reschedule.",
+        "Sarvam Dental Clinic"
       ].join("\n")
     : [
       `Hi ${appointment.patient_name},`,
       "Your appointment request could not be confirmed for the selected slot.",
       `Date Requested: ${appointment.preferred_date}`,
       `Slot Requested: ${appointment.preferred_slot}`,
-      `Please reply on WhatsApp or call ${CLINIC_PHONE.replace("+91", "")} to book another slot.`,
-      CLINIC_NAME
+      "Please reply on WhatsApp or call 8328010083 to book another slot.",
+      "Sarvam Dental Clinic"
     ].join("\n");
 
   const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
@@ -2126,8 +2191,8 @@ function openWhatsappForClinicBlock(appointment, reason) {
     `Slot: ${appointment.preferred_slot}`,
     `Service: ${appointment.service}`,
     `Reason: ${reason}`,
-    `Please contact ${CLINIC_NAME} to reschedule.`,
-    CLINIC_NAME
+    "Please contact Sarvam Dental Clinic to reschedule.",
+    "Sarvam Dental Clinic"
   ].join("\n");
 
   const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
@@ -2560,71 +2625,6 @@ function resetPatientForm() {
 }
 
 function renderPatientDetail(patient, consultations = []) {
-          : "—";
-        tr.innerHTML = `
-          <td>${consultation.consultation_date || "—"}</td>
-          <td>${consultation.notes || "—"}</td>
-          <td>${reportCell}</td>
-        `;
-        patientConsultationsBody.appendChild(tr);
-      });
-    }
-  }
-}
-
-async function loadPatientConsultations(patientId) {
-  const { data, error } = await supabase
-    .from("patient_consultations")
-    .select("id, consultation_date, notes, report_url, created_at")
-    .eq("patient_id", patientId)
-    .order("consultation_date", { ascending: false })
-    .order("created_at", { ascending: false });
-  if (error) {
-    throw new Error(error.message);
-  }
-  return data || [];
-}
-
-async function selectPatientRecord(patientId) {
-  selectedPatientRecordId = patientId;
-  renderPatientList();
-  const patient = patientRecordsCache.find((entry) => entry.id === patientId);
-  if (!patient) {
-    renderPatientEmptyState();
-    return;
-  }
-  try {
-    const consultations = await loadPatientConsultations(patientId);
-    renderPatientDetail(patient, consultations);
-  } catch (error) {
-    setStatus(appStatus, `Unable to load consultation history: ${error.message}`, "error");
-    showToast("Unable to load consultation history.", "error");
-  }
-}
-
-async function loadPatientRecords(options = {}) {
-  const { preserveSelection = true } = options;
-  const { data, error } = await supabase
-    .from("patients")
-    .select("id, clinic_patient_code, patient_name, patient_phone, drive_folder_url, created_at")
-    .order("patient_name", { ascending: true });
-  if (error) {
-    throw new Error(error.message);
-  }
-  patientRecordsCache = data || [];
-  renderPatientList();
-  if (preserveSelection && selectedPatientRecordId) {
-    if (patientRecordsCache.some((patient) => patient.id === selectedPatientRecordId)) {
-      await selectPatientRecord(selectedPatientRecordId);
-      return;
-    }
-  }
-  if (patientRecordsCache.length && !selectedPatientRecordId) {
-    await selectPatientRecord(patientRecordsCache[0].id);
-    return;
-  }
-  if (!patientRecordsCache.length) {
-function renderPatientDetail(patient, consultations = []) {
   if (!patient) {
     renderPatientEmptyState();
     return;
@@ -2726,6 +2726,53 @@ async function loadPatientRecords(options = {}) {
   if (preserveSelection && selectedPatientRecordId) {
     if (patientRecordsCache.some((patient) => patient.id === selectedPatientRecordId)) {
       await selectPatientRecord(selectedPatientRecordId);
+      return;
+    }
+  }
+  if (patientRecordsCache.length && !selectedPatientRecordId) {
+    await selectPatientRecord(patientRecordsCache[0].id);
+    return;
+  }
+  if (!patientRecordsCache.length) {
+    renderPatientEmptyState();
+  }
+}
+
+async function importPatientsFromAppointments() {
+  const { data: appointments, error } = await supabase
+    .from("appointments")
+    .select("patient_name, patient_phone, created_at")
+    .order("created_at", { ascending: false });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const existingByPhone = new Set(patientRecordsCache.map((patient) => patient.patient_phone));
+  const seen = new Set();
+  const rowsToInsert = [];
+  (appointments || []).forEach((appointment) => {
+    const phone = String(appointment.patient_phone || "").trim();
+    const name = String(appointment.patient_name || "").trim();
+    if (!phone || !name || existingByPhone.has(phone) || seen.has(phone)) {
+      return;
+    }
+    seen.add(phone);
+    rowsToInsert.push({
+      patient_name: name,
+      patient_phone: phone
+    });
+  });
+  if (!rowsToInsert.length) {
+    showToast("No new patients found in appointments.", "warn");
+    return;
+  }
+  const { error: insertError } = await supabase.from("patients").insert(rowsToInsert);
+  if (insertError) {
+    throw new Error(insertError.message);
+  }
+  showToast(`${rowsToInsert.length} patient record(s) imported.`, "success");
+  await loadPatientRecords({ preserveSelection: false });
+}
+
 async function savePatientRecord(event) {
   event.preventDefault();
   const patientName = String(patientNameInput?.value || "").trim();
@@ -2799,53 +2846,6 @@ async function savePatientRecord(event) {
 }
 
 async function saveConsultationRecord(event) {
-    if (!data?.id) {
-      throw new Error("Delete was blocked or the record no longer exists. Please rerun the latest schema and try again.");
-    }
-    selectedPatientRecordId = null;
-    patientForm?.reset();
-    consultationForm?.reset();
-    setStatus(appStatus, "Patient record deleted.", "ok");
-    showToast("Patient record deleted.", "success");
-    await loadPatientRecords({ preserveSelection: false });
-    if (!patientRecordsCache.length) {
-      renderPatientEmptyState("No patient records yet. Create a new patient to get started.");
-    }
-  } catch (error) {
-    setStatus(appStatus, `Unable to delete patient record: ${error.message}`, "error");
-    showToast(`Unable to delete patient record: ${error.message}`, "error");
-    if (deletingPatient) {
-      await selectPatientRecord(deletingPatient.id).catch(() => {});
-    }
-  }
-}
-
-function slotStartMinutes(slotLabel) {
-  const match = String(slotLabel || "").match(/^(\d{1,2}):(\d{2})\s(AM|PM)/);
-  if (!match) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  let hours = Number(match[1]) % 12;
-  const minutes = Number(match[2]);
-  if (match[3] === "PM") {
-    hours += 12;
-  }
-  return hours * 60 + minutes;
-}
-
-function actionButton(label, onClick) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "tiny-btn";
-  btn.textContent = label;
-  btn.addEventListener("click", onClick);
-  return btn;
-}
-
-function setTimelineCollapsed(collapsed) {
-  if (!timelineContent || !toggleTimelineBtn) {
-    return;
-async function saveConsultationRecord(event) {
   event.preventDefault();
   const patientId = String(patientFormId?.value || selectedPatientRecordId || "").trim();
   const consultationDate = String(consultationDateInput?.value || "").trim();
@@ -2898,8 +2898,8 @@ async function deleteSelectedPatientRecord() {
   }
   if (!canDeletePatientRecords()) {
     closePatientDeleteModal();
-    setStatus(appStatus, "Only dentist can delete patient records.", "error");
-    showToast("Only dentist can delete patient records.", "error");
+    setStatus(appStatus, "Only lead therapist can delete patient records.", "error");
+    showToast("Only lead therapist can delete patient records.", "error");
     return;
   }
 
@@ -2916,6 +2916,124 @@ async function deleteSelectedPatientRecord() {
       .maybeSingle();
     if (error) {
       throw new Error(error.message);
+    }
+    if (!data?.id) {
+      throw new Error("Delete was blocked or the record no longer exists. Please rerun the latest schema and try again.");
+    }
+    selectedPatientRecordId = null;
+    patientForm?.reset();
+    consultationForm?.reset();
+  setConsultationUploadState("", "");
+    setStatus(appStatus, "Patient record deleted.", "ok");
+    showToast("Patient record deleted.", "success");
+    await loadPatientRecords({ preserveSelection: false });
+    if (!patientRecordsCache.length) {
+      renderPatientEmptyState("No patient records yet. Create a new patient to get started.");
+    }
+  } catch (error) {
+    setStatus(appStatus, `Unable to delete patient record: ${error.message}`, "error");
+    showToast(`Unable to delete patient record: ${error.message}`, "error");
+    if (deletingPatient) {
+      await selectPatientRecord(deletingPatient.id).catch(() => {});
+    }
+  }
+}
+
+function slotStartMinutes(slotLabel) {
+  const match = String(slotLabel || "").match(/^(\d{1,2}):(\d{2})\s(AM|PM)/);
+  if (!match) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  let hours = Number(match[1]) % 12;
+  const minutes = Number(match[2]);
+  if (match[3] === "PM") {
+    hours += 12;
+  }
+  return hours * 60 + minutes;
+}
+
+function actionButton(label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tiny-btn";
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function setTimelineCollapsed(collapsed) {
+  if (!timelineContent || !toggleTimelineBtn) {
+    return;
+  }
+  timelineContent.hidden = collapsed;
+  setCollapseToggleState(toggleTimelineBtn, collapsed, "day snapshot");
+}
+
+function setAppointmentsCollapsed(collapsed) {
+  if (!appointmentsContent || !toggleAppointmentsBtn) {
+    return;
+  }
+  appointmentsContent.hidden = collapsed;
+  setCollapseToggleState(toggleAppointmentsBtn, collapsed, "appointments");
+}
+
+function setEmergencyBlockCollapsed(collapsed) {
+  if (!emergencyBlockContent || !toggleEmergencyBlockBtn) {
+    return;
+  }
+  emergencyBlockContent.hidden = collapsed;
+  setCollapseToggleState(toggleEmergencyBlockBtn, collapsed, "emergency session blocking");
+}
+
+function setLeaveBlockCollapsed(collapsed) {
+  if (!leaveBlockContent || !toggleLeaveBlockBtn) {
+    return;
+  }
+  leaveBlockContent.hidden = collapsed;
+  setCollapseToggleState(toggleLeaveBlockBtn, collapsed, "holiday and leave blocking");
+}
+
+function setBlockedSlotsHistoryCollapsed(collapsed) {
+  if (!blockedSlotsHistoryContent || !toggleBlockedSlotsHistoryBtn) {
+    return;
+  }
+  blockedSlotsHistoryContent.hidden = collapsed;
+  setCollapseToggleState(toggleBlockedSlotsHistoryBtn, collapsed, "blocked sessions history");
+}
+
+function setBlockedDatesHistoryCollapsed(collapsed) {
+  if (!blockedDatesHistoryContent || !toggleBlockedDatesHistoryBtn) {
+    return;
+  }
+  blockedDatesHistoryContent.hidden = collapsed;
+  setCollapseToggleState(toggleBlockedDatesHistoryBtn, collapsed, "blocked dates history");
+}
+
+async function loadTimeline() {
+  if (!timelineDate || !timelineBody || !timelineSummary) {
+    return;
+  }
+
+  const selectedDate = timelineDate.value || todayYmdInKolkata();
+  const duration = getSlotDurationForDate(selectedDate);
+  const daySlots = buildSlots(duration);
+  timelineBody.innerHTML = "";
+  timelineBody.classList.remove("overlay-active");
+  timelineSummary.textContent = "Loading timeline...";
+
+  const [appointmentsResult, blockedDateResult, blockedSlotsResult] = await Promise.all([
+    supabase
+      .from("appointments")
+      .select("id, patient_name, patient_phone, preferred_date, preferred_slot, service, status, notes, status_note")
+      .eq("preferred_date", selectedDate)
+      .order("preferred_slot", { ascending: true }),
+    supabase
+      .from("blocked_dates")
+      .select("id, reason")
+      .lte("from_date", selectedDate)
+      .gte("to_date", selectedDate)
+      .limit(1)
+      .maybeSingle(),
     supabase
       .from("blocked_slots")
       .select("slot_label, reason")
@@ -2997,10 +3115,10 @@ async function deleteSelectedPatientRecord() {
           item.className = `timeline-item ${applyStatusClass(appointment.status)}`;
           const title = document.createElement("div");
           title.className = "timeline-title";
-          title.textContent = `${appointment.patient_name} � ${appointment.service}`;
+          title.textContent = `${appointment.patient_name} | ${appointment.service}`;
           const sub = document.createElement("div");
           sub.className = "timeline-sub";
-          sub.textContent = `${appointment.patient_phone} � ${appointment.status}`;
+          sub.textContent = `${appointment.patient_phone} | ${appointment.status}`;
           item.append(title, sub);
 
           if (appointment.notes || appointment.status_note) {
@@ -3099,10 +3217,24 @@ function setDefaultDateRange() {
 }
 
 async function init() {
+  await loadClinicSettings();
+  if (timelineDate) {
+    timelineDate.value = todayYmdInKolkata();
+  }
+  fillSlotSelect(slotBlockLabel, todayYmdInKolkata());
+  fillSlotSelect(manualSlot, todayYmdInKolkata());
+  SERVICES.forEach((service) => {
+    const option = document.createElement("option");
+    option.value = service;
+    option.textContent = service;
+    manualService.appendChild(option);
+  });
+
+  setDefaultDateRange();
   showLoginView();
   setSelectedLoginRole("lead_therapist");
 
-  loginForm?.addEventListener("submit", handleLogin);
+  loginForm.addEventListener("submit", handleLogin);
   dentistRoleBtn?.addEventListener("click", () => setSelectedLoginRole("lead_therapist"));
   staffRoleBtn?.addEventListener("click", () => setSelectedLoginRole("staff"));
   if (mfaSetupVerifyBtn) {
@@ -3133,47 +3265,24 @@ async function init() {
       }
     });
   }
-
-  try {
-    await loadClinicSettings();
-    if (timelineDate) {
-      timelineDate.value = todayYmdInKolkata();
-    }
-    fillSlotSelect(slotBlockLabel, todayYmdInKolkata());
-    fillSlotSelect(manualSlot, todayYmdInKolkata());
-    if (manualService && !manualService.options.length) {
-      SERVICES.forEach((service) => {
-        const option = document.createElement("option");
-        option.value = service;
-        option.textContent = service;
-        manualService.appendChild(option);
-      });
-    }
-
-    setDefaultDateRange();
-  } catch (error) {
-    console.error("RPC dashboard bootstrap failed", error);
-    setStatus(loginStatus, "Clinic dashboard setup is still loading. You can continue with login.", "warn");
-  }
-
-  openSettingsBtn?.addEventListener("click", openSettingsModal);
+  openSettingsBtn.addEventListener("click", openSettingsModal);
   sidebarControlPanelBtn?.addEventListener("click", openSettingsModal);
-  settingsCancelBtn?.addEventListener("click", closeSettingsModal);
+  settingsCancelBtn.addEventListener("click", closeSettingsModal);
   settingsCloseBtn?.addEventListener("click", closeSettingsModal);
-  settingsForm?.addEventListener("submit", saveClinicSettings);
+  settingsForm.addEventListener("submit", saveClinicSettings);
   addUserForm?.addEventListener("submit", handleAddUser);
   refreshUsersBtn?.addEventListener("click", loadAccessUsers);
   toggleManageUsersBtn?.addEventListener("click", () => {
     const collapsed = !manageUsersContent || manageUsersContent.hidden;
     setManageUsersCollapsed(!collapsed);
   });
-  settingsModal?.addEventListener("click", (event) => {
+  settingsModal.addEventListener("click", (event) => {
     if (event.target === settingsModal) {
       closeSettingsModal();
     }
   });
   window.addEventListener("popstate", () => {
-    if (settingsModal && !settingsModal.hidden) {
+    if (!settingsModal.hidden) {
       closeSettingsModal(true);
     }
   });
@@ -3227,28 +3336,28 @@ async function init() {
   }
   setBlockedDatesHistoryCollapsed(mobileAdminQuery.matches);
 
-  slotBlockDate?.addEventListener("change", () => {
+  slotBlockDate.addEventListener("change", () => {
     fillSlotSelect(slotBlockLabel, slotBlockDate.value || todayYmdInKolkata());
     slotPickerDraftSelection = new Set();
     updateSlotPickerSummary();
   });
-  manualDate?.addEventListener("change", () => {
+  manualDate.addEventListener("change", () => {
     fillSlotSelect(manualSlot, manualDate.value || todayYmdInKolkata());
   });
 
-  forgotPasswordBtn?.addEventListener("click", showForgotView);
+  forgotPasswordBtn.addEventListener("click", showForgotView);
   confirmLinkBackBtn?.addEventListener("click", showLoginView);
   confirmLinkForm?.addEventListener("submit", handleResendConfirmation);
   forgotBackBtn?.addEventListener("click", showLoginView);
   forgotSentBackBtn?.addEventListener("click", showLoginView);
   forgotTryAgainBtn?.addEventListener("click", showForgotView);
   forgotSentResendConfirmBtn?.addEventListener("click", showConfirmationLinkView);
-  forgotForm?.addEventListener("submit", handleForgotPassword);
+  forgotForm.addEventListener("submit", handleForgotPassword);
   const savedCooldown = Number(localStorage.getItem(FORGOT_COOLDOWN_KEY) || 0);
   if (savedCooldown > Date.now()) {
     startForgotCooldown(savedCooldown);
   }
-  resetForm?.addEventListener("submit", handleResetPassword);
+  resetForm.addEventListener("submit", handleResetPassword);
   resetBackBtn?.addEventListener("click", showLoginView);
   supabase.auth.onAuthStateChange((eventName) => {
     if (eventName === "PASSWORD_RECOVERY" || (eventName === "SIGNED_IN" && (recoveryModeActive || isResetModeRequested()))) {
@@ -3487,14 +3596,6 @@ async function init() {
     }
     openPatientDeleteModal(selectedPatient);
   });
-  importPatientsBtn?.addEventListener("click", async () => {
-    try {
-      await importPatientsFromAppointments();
-    } catch (error) {
-      setStatus(appStatus, `Unable to import patients: ${error.message}`, "error");
-      showToast("Unable to import patients.", "error");
-    }
-  });
   patientDriveLink?.addEventListener("click", async (event) => {
     event.preventDefault();
     const selectedPatient = patientRecordsCache.find((entry) => entry.id === String(patientFormId?.value || selectedPatientRecordId || "").trim());
@@ -3514,6 +3615,14 @@ async function init() {
     } catch (error) {
       setStatus(appStatus, `Unable to access folder: ${error.message}`, "error");
       showToast(`Unable to access folder: ${error.message}`, "error");
+    }
+  });
+  importPatientsBtn?.addEventListener("click", async () => {
+    try {
+      await importPatientsFromAppointments();
+    } catch (error) {
+      setStatus(appStatus, `Unable to import patients: ${error.message}`, "error");
+      showToast("Unable to import patients.", "error");
     }
   });
   patientForm?.addEventListener("submit", savePatientRecord);
@@ -3591,11 +3700,65 @@ async function init() {
       return;
     }
 
-    setStatus(appStatus, "Date range blocked.", "ok");
-    showToast("Date range blocked.", "success");
     blockForm.reset();
+    setStatus(appStatus, "Dates blocked successfully.", "ok");
+    showToast("Dates blocked successfully.", "success");
     await loadBlockedDates();
-    await loadDashboard();
+  });
+
+  slotBlockForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const uid = await currentUserId();
+    if (!uid) {
+      setStatus(appStatus, "Session expired. Please login again.", "error");
+      return;
+    }
+
+    if (!slotBlockDate.value) {
+      setStatus(appStatus, "Select block date.", "error");
+      showToast("Select block date first.", "warn");
+      return;
+    }
+
+    const selectedSlots = getSelectedEmergencySlots();
+    if (selectedSlots.length === 0) {
+      setStatus(appStatus, "Select at least one session slot.", "error");
+      showToast("Select at least one session slot.", "warn");
+      return;
+    }
+    const reason = slotBlockReason.value.trim();
+
+    try {
+      const conflicts = await getApprovedAppointmentsForSlots(slotBlockDate.value, selectedSlots);
+      if (conflicts.length > 0) {
+        if (!reason) {
+          setStatus(appStatus, "Enter doctor reason before blocking a session with approved appointments.", "warn");
+          showToast("Enter reason before proceeding. It will be sent to affected patients.", "warn");
+          return;
+        }
+        openBlockConflictModal({
+          uid,
+          blockDate: slotBlockDate.value,
+          selectedSlots,
+          reason,
+          conflicts
+        });
+        return;
+      }
+
+      await applySessionBlocks(slotBlockDate.value, selectedSlots, reason, uid);
+      slotBlockForm.reset();
+      fillSlotSelect(slotBlockLabel, slotBlockDate.value || todayYmdInKolkata());
+      slotPickerDraftSelection = new Set();
+      updateSlotPickerSummary();
+      setStatus(appStatus, `${selectedSlots.length} session(s) blocked successfully.`, "ok");
+      showToast(`${selectedSlots.length} session(s) blocked successfully.`, "success");
+      await loadBlockedSlots();
+      await loadDashboard();
+    } catch (error) {
+      setStatus(appStatus, `Unable to block session: ${error.message}`, "error");
+      showToast("Unable to block session.", "error");
+    }
   });
 
   if (slotSelectAllBtn) {
@@ -3684,7 +3847,4 @@ async function init() {
 }
 
 init();
-
-
-
 
